@@ -1,0 +1,35 @@
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_USER: forex
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-forex_dev_123}
+      POSTGRES_DB: forex_scalper
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U forex -d forex_scalper"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  bot:
+    build: .
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    environment:
+      DB_HOST: timescaledb
+      DB_PORT: 5432
+      DB_USER: forex
+      DB_PASSWORD: ${DB_PASSWORD:-forex_dev_123}
+      DB_NAME: forex_scalper
+      DATA_FEED: demo
+    volumes:
+      - ./:/app
+
+volumes:
+  timescaledb_data:
