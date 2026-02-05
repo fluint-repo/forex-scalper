@@ -10,10 +10,11 @@ from fastapi.testclient import TestClient
 
 from src.api.app import app
 from src.api.deps import get_engine_manager
-from src.api.state import EngineManager
+from src.api.state import EngineManager, EngineInstance
 from src.broker.paper import PaperBroker
 from src.broker.base import OrderSide
 from src.data.demo_feed import DemoFeed
+from src.engine.event_bus import EventBus
 from src.strategy.ema_crossover import EMACrossoverStrategy
 
 
@@ -27,6 +28,22 @@ def client(mgr):
     app.dependency_overrides[get_engine_manager] = lambda: mgr
     yield TestClient(app)
     app.dependency_overrides.clear()
+
+
+def _inject_broker(mgr, broker, strategy_name="ema_crossover"):
+    """Helper to inject a broker into the engine manager via an EngineInstance."""
+    engine_mock = MagicMock()
+    engine_mock.is_running = True
+    engine_mock.candle_history = MagicMock(empty=True)
+    strategy = MagicMock()
+    strategy.name = strategy_name
+    inst = EngineInstance(
+        engine_id="test", engine=engine_mock, broker=broker,
+        feed=MagicMock(), strategy=strategy, event_bus=EventBus(),
+        symbol="EURUSD=X", timeframe="1h", broker_type="paper",
+    )
+    mgr._engines["test"] = inst
+    mgr._last_started = "test"
 
 
 class TestHealth:
@@ -43,7 +60,7 @@ class TestAccountRoute:
 
     def test_with_broker(self, client, mgr):
         broker = PaperBroker()
-        mgr.broker = broker
+        _inject_broker(mgr, broker)
         resp = client.get("/api/account")
         assert resp.status_code == 200
         data = resp.json()
@@ -57,7 +74,7 @@ class TestPositionsRoute:
         assert resp.status_code == 400
 
     def test_empty_positions(self, client, mgr):
-        mgr.broker = PaperBroker()
+        _inject_broker(mgr, PaperBroker())
         resp = client.get("/api/positions")
         assert resp.status_code == 200
         assert resp.json() == []
@@ -66,7 +83,7 @@ class TestPositionsRoute:
         broker = PaperBroker()
         broker.update_price("EURUSD=X", 1.085, 1.0852)
         broker.place_order("EURUSD=X", OrderSide.BUY, 0.001, sl=1.08, tp=1.09)
-        mgr.broker = broker
+        _inject_broker(mgr, broker)
 
         positions = broker.get_positions()
         order_id = positions[0]["order_id"]
@@ -81,7 +98,7 @@ class TestTradesRoute:
         assert resp.status_code == 400
 
     def test_empty_trades(self, client, mgr):
-        mgr.broker = PaperBroker()
+        _inject_broker(mgr, PaperBroker())
         resp = client.get("/api/trades")
         assert resp.status_code == 200
         assert resp.json() == []
@@ -104,13 +121,16 @@ class TestStrategyRoute:
             "capital": 10000,
         })
         assert resp.status_code == 200
-        assert resp.json()["status"] == "started"
+        data = resp.json()
+        assert data["status"] == "started"
+        assert "engine_id" in data
 
-        # Check status
+        # Check status — multi-engine format
         resp = client.get("/api/strategy/status")
         assert resp.status_code == 200
         status = resp.json()
-        assert status["strategy"] == "ema_crossover"
+        assert "engines" in status
+        assert status["running"] is False  # engine.start was mocked
 
     def test_start_unknown_strategy(self, client, mgr):
         resp = client.post("/api/strategy/start", json={

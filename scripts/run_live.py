@@ -85,13 +85,24 @@ def main() -> None:
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
-    # Start and wait
+    # Start and wait (blocks until engine stops or signal received)
     engine.start()
-    engine.wait()
+    engine.wait(timeout=None)
+
+    # Join stream thread with timeout
+    if engine._stream_thread is not None:
+        engine._stream_thread.join(timeout=30)
+        if engine._stream_thread.is_alive():
+            log.warning("stream_thread_did_not_stop")
 
     # Session summary
-    account = broker.get_account_info()
-    closed = broker.get_closed_trades()
+    try:
+        account = broker.get_account_info()
+        closed = broker.get_closed_trades()
+    except Exception:
+        log.exception("session_summary_failed")
+        return
+
     print("\n" + "=" * 60)
     print("SESSION SUMMARY")
     print("=" * 60)

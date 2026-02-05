@@ -50,3 +50,33 @@ CREATE TABLE IF NOT EXISTS trades (
 
 CREATE INDEX IF NOT EXISTS idx_trades_strategy_symbol
     ON trades (strategy_name, symbol);
+
+-- Phase 5C: Strategy run metadata
+CREATE TABLE IF NOT EXISTS strategy_runs (
+    id SERIAL PRIMARY KEY,
+    strategy_name VARCHAR(50) NOT NULL,
+    symbol VARCHAR(20) NOT NULL,
+    timeframe VARCHAR(10) NOT NULL,
+    broker_type VARCHAR(20) NOT NULL,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    stopped_at TIMESTAMPTZ,
+    initial_capital DOUBLE PRECISION,
+    final_capital DOUBLE PRECISION,
+    total_trades INT DEFAULT 0,
+    config JSONB
+);
+
+-- Add run_id to trades
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS run_id INT REFERENCES strategy_runs(id);
+
+-- Phase 5C: Daily P&L summary
+CREATE TABLE IF NOT EXISTS daily_summary (
+    id SERIAL PRIMARY KEY,
+    run_id INT REFERENCES strategy_runs(id),
+    date DATE NOT NULL,
+    realized_pnl DOUBLE PRECISION DEFAULT 0,
+    trade_count INT DEFAULT 0,
+    win_count INT DEFAULT 0,
+    max_drawdown DOUBLE PRECISION DEFAULT 0,
+    UNIQUE(run_id, date)
+);

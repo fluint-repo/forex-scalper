@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, ".")
 
 import pytest
+import requests as req_lib
 
 from src.broker.base import OrderSide
 from src.broker.oanda import OandaBroker
@@ -67,10 +68,12 @@ class TestPlaceOrder:
 
     @patch("src.broker.oanda.requests.request")
     def test_order_rejection(self, mock_req):
-        import requests as req_lib
         mock_resp = MagicMock()
+        mock_error_resp = MagicMock()
+        mock_error_resp.status_code = 400
+        mock_error_resp.json.return_value = {"errorMessage": "Insufficient margin"}
         mock_resp.raise_for_status.side_effect = req_lib.exceptions.HTTPError(
-            response=MagicMock(json=MagicMock(return_value={"errorMessage": "Insufficient margin"}))
+            response=mock_error_resp
         )
         mock_req.return_value = mock_resp
 
@@ -176,3 +179,83 @@ class TestGetClosedTrades:
         assert len(trades) == 1
         assert trades[0]["pnl"] == 10.0
         assert trades[0]["side"] == "BUY"
+
+
+class TestRetryLogic:
+    @patch("src.broker.oanda.time.sleep")
+    @patch("src.broker.oanda.requests.request")
+    def test_retry_on_connection_error(self, mock_req, mock_sleep):
+        """Should retry on ConnectionError and succeed on second attempt."""
+        mock_resp_ok = MagicMock()
+        mock_resp_ok.json.return_value = {"account": {"balance": "10000", "NAV": "10000"}}
+        mock_resp_ok.raise_for_status = MagicMock()
+
+        mock_req.side_effect = [
+            req_lib.exceptions.ConnectionError("Connection refused"),
+            mock_resp_ok,
+        ]
+
+        broker = _make_broker()
+        info = broker.get_account_info()
+        assert info["balance"] == 10000.0
+        assert mock_req.call_count == 2
+        mock_sleep.assert_called_once_with(1)  # 2^0 = 1
+
+    @patch("src.broker.oanda.time.sleep")
+    @patch("src.broker.oanda.requests.request")
+    def test_retry_on_5xx(self, mock_req, mock_sleep):
+        """Should retry on 5xx server errors."""
+        mock_resp_500 = MagicMock()
+        mock_resp_500.status_code = 500
+        http_err = req_lib.exceptions.HTTPError(response=mock_resp_500)
+        mock_resp_500.raise_for_status.side_effect = http_err
+
+        mock_resp_ok = MagicMock()
+        mock_resp_ok.json.return_value = {"account": {"balance": "10000", "NAV": "10000"}}
+        mock_resp_ok.raise_for_status = MagicMock()
+
+        mock_req.side_effect = [mock_resp_500, mock_resp_ok]
+
+        broker = _make_broker()
+        info = broker.get_account_info()
+        assert info["balance"] == 10000.0
+        assert mock_req.call_count == 2
+
+    @patch("src.broker.oanda.time.sleep")
+    @patch("src.broker.oanda.requests.request")
+    def test_no_retry_on_4xx(self, mock_req, mock_sleep):
+        """Should NOT retry on 4xx client errors."""
+        mock_resp_401 = MagicMock()
+        mock_resp_401.status_code = 401
+        http_err = req_lib.exceptions.HTTPError(response=mock_resp_401)
+        mock_resp_401.raise_for_status.side_effect = http_err
+
+        mock_req.return_value = mock_resp_401
+
+        broker = _make_broker()
+        with pytest.raises(req_lib.exceptions.HTTPError):
+            broker._api("GET", "/summary")
+        assert mock_req.call_count == 1
+        mock_sleep.assert_not_called()
+
+    @patch("src.broker.oanda.time.sleep")
+    @patch("src.broker.oanda.requests.request")
+    def test_max_retries_exhausted(self, mock_req, mock_sleep):
+        """Should raise after exhausting max retries."""
+        mock_req.side_effect = req_lib.exceptions.ConnectionError("Connection refused")
+
+        broker = _make_broker()
+        with pytest.raises(req_lib.exceptions.ConnectionError):
+            broker._api("GET", "/summary")
+        assert mock_req.call_count == 3  # default max_retries=3
+
+    @patch("src.broker.oanda.time.sleep")
+    @patch("src.broker.oanda.requests.request")
+    def test_place_order_catches_request_exception(self, mock_req, mock_sleep):
+        """place_order should catch RequestException (not just HTTPError)."""
+        mock_req.side_effect = req_lib.exceptions.ConnectionError("Connection refused")
+
+        broker = _make_broker()
+        result = broker.place_order("EURUSD=X", OrderSide.BUY, 0.1, sl=1.0800, tp=1.0900)
+        assert not result.success
+        assert "Connection refused" in result.message

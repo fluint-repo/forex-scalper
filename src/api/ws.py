@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from config.settings import API_KEY
 from src.api.deps import get_engine_manager
 from src.utils.logger import get_logger
 
@@ -53,41 +54,74 @@ ws_manager = ConnectionManager()
 _last_tick_broadcast = 0.0
 _TICK_THROTTLE_SECONDS = 1.0
 
+# Track which event buses we've subscribed to
+_subscribed_buses: set[int] = set()
 
-def _on_engine_event(event_type: str, data: Any) -> None:
-    """Sync callback from EventBus → schedules async broadcast."""
-    global _last_tick_broadcast
 
-    if ws_manager.client_count == 0:
-        return
+def _make_event_handler(engine_id: str = ""):
+    """Create event handler that includes engine_id in messages."""
+    def _on_engine_event(event_type: str, data: Any) -> None:
+        global _last_tick_broadcast
 
-    # Throttle tick events
-    if event_type == "tick":
-        now = time.time()
-        if now - _last_tick_broadcast < _TICK_THROTTLE_SECONDS:
+        if ws_manager.client_count == 0:
             return
-        _last_tick_broadcast = now
 
-    message = {"type": event_type, "data": data}
+        # Throttle tick events
+        if event_type == "tick":
+            now = time.time()
+            if now - _last_tick_broadcast < _TICK_THROTTLE_SECONDS:
+                return
+            _last_tick_broadcast = now
 
-    try:
-        loop = asyncio.get_running_loop()
-        loop.call_soon_threadsafe(asyncio.ensure_future, ws_manager.broadcast(message))
-    except RuntimeError:
-        pass
+        message = {"type": event_type, "data": data}
+        if engine_id:
+            message["engine_id"] = engine_id
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.call_soon_threadsafe(asyncio.ensure_future, ws_manager.broadcast(message))
+        except RuntimeError:
+            pass
+
+    return _on_engine_event
 
 
-def setup_event_bus_bridge() -> None:
+def setup_event_bus_bridge(engine_id: str = "") -> None:
     """Subscribe to engine events if event_bus is available."""
     mgr = get_engine_manager()
+
+    # Multi-engine: subscribe to all event buses
+    for inst in (mgr._engines.values() if hasattr(mgr, '_engines') else []):
+        bus_id = id(inst.event_bus)
+        if bus_id not in _subscribed_buses:
+            handler = _make_event_handler(inst.engine_id)
+            for evt in ("tick", "candle_closed", "signal", "order_filled",
+                         "position_closed", "engine_started", "engine_stopped",
+                         "circuit_breaker", "risk_blocked"):
+                inst.event_bus.subscribe(evt, handler)
+            _subscribed_buses.add(bus_id)
+
+    # Legacy fallback
     if mgr.event_bus is not None:
-        for evt in ("tick", "candle_closed", "signal", "order_filled",
-                     "position_closed", "engine_started", "engine_stopped"):
-            mgr.event_bus.subscribe(evt, _on_engine_event)
+        bus_id = id(mgr.event_bus)
+        if bus_id not in _subscribed_buses:
+            handler = _make_event_handler(engine_id)
+            for evt in ("tick", "candle_closed", "signal", "order_filled",
+                         "position_closed", "engine_started", "engine_stopped",
+                         "circuit_breaker", "risk_blocked"):
+                mgr.event_bus.subscribe(evt, handler)
+            _subscribed_buses.add(bus_id)
 
 
 @router.websocket("/ws/stream")
 async def websocket_stream(ws: WebSocket):
+    # Check API key if configured
+    if API_KEY:
+        key = ws.query_params.get("api_key", "")
+        if key != API_KEY:
+            await ws.close(code=4001, reason="Invalid API key")
+            return
+
     await ws_manager.connect(ws)
     try:
         while True:
@@ -109,17 +143,23 @@ async def periodic_account_broadcast() -> None:
             continue
 
         mgr = get_engine_manager()
-        if mgr.broker is None:
+
+        # Subscribe to any new event buses
+        setup_event_bus_bridge()
+
+        if not mgr.is_running:
             continue
 
         try:
-            account = mgr.broker.get_account_info()
-            positions = mgr.broker.get_positions()
+            account = mgr.get_aggregated_account()
+            positions = mgr.get_all_positions()
+            engines = mgr.list_engines()
             await ws_manager.broadcast({
                 "type": "account_update",
                 "data": {
                     "account": account,
                     "positions": positions,
+                    "engines": engines,
                 },
             })
         except Exception:

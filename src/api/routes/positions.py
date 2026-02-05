@@ -1,6 +1,6 @@
 """Positions endpoints."""
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.api.deps import get_engine_manager
 from src.api.schemas import PositionResponse
@@ -10,10 +10,20 @@ router = APIRouter(prefix="/api", tags=["positions"])
 
 
 @router.get("/positions", response_model=list[PositionResponse])
-def get_positions(mgr: EngineManager = Depends(get_engine_manager)):
-    if mgr.broker is None:
+def get_positions(
+    engine_id: str | None = Query(None),
+    mgr: EngineManager = Depends(get_engine_manager),
+):
+    if engine_id:
+        inst = mgr.get_engine(engine_id)
+        if inst is None:
+            raise HTTPException(status_code=404, detail=f"Engine '{engine_id}' not found")
+        positions = inst.broker.get_positions()
+    elif mgr.broker is not None:
+        positions = mgr.broker.get_positions()
+    else:
         raise HTTPException(status_code=400, detail="No broker active")
-    positions = mgr.broker.get_positions()
+
     result = []
     for p in positions:
         result.append(PositionResponse(

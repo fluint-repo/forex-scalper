@@ -12,11 +12,21 @@ router = APIRouter(prefix="/api", tags=["candles"])
 @router.get("/candles", response_model=list[CandleResponse])
 def get_candles(
     limit: int = Query(250, ge=1, le=5000),
+    engine_id: str | None = Query(None),
     mgr: EngineManager = Depends(get_engine_manager),
 ):
-    if mgr.engine is None:
+    if engine_id:
+        inst = mgr.get_engine(engine_id)
+        if inst is None:
+            raise HTTPException(status_code=404, detail=f"Engine '{engine_id}' not found")
+        engine = inst.engine
+    else:
+        engine = mgr.engine
+
+    if engine is None:
         raise HTTPException(status_code=400, detail="No engine active")
-    df = mgr.engine.candle_history
+
+    df = engine.candle_history
     if df.empty:
         return []
     df = df.tail(limit)

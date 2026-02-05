@@ -213,3 +213,57 @@ class TestEngineLifecycle:
         assert engine.is_running
         engine._running.clear()
         assert not engine.is_running
+
+    def test_health_status(self):
+        engine, broker = self._make_engine()
+        status = engine.health_status
+        assert status["running"] is False
+        assert status["stream_alive"] is False
+        assert status["last_tick_age"] == -1
+        assert status["tick_errors"] == 0
+
+    def test_last_tick_time_updated(self):
+        engine, broker = self._make_engine()
+        engine._running.set()
+        broker.update_price("EURUSD=X", bid=1.0850, ask=1.0852)
+        tick = {"timestamp": pd.Timestamp("2024-01-15T10:00:00"), "bid": 1.0850, "ask": 1.0852}
+        engine._on_tick(tick)
+        assert engine._last_tick_time > 0
+
+    def test_tick_error_resilience(self):
+        """Tick processing should survive broker errors."""
+        from unittest.mock import MagicMock
+        from src.engine.trading import TradingEngine
+        from src.data.demo_feed import DemoFeed
+        from src.strategy.ema_crossover import EMACrossoverStrategy
+
+        strategy = EMACrossoverStrategy()
+        feed = DemoFeed()
+        broker = MagicMock()
+        broker.server_managed_sl_tp = False
+        broker.update_price.side_effect = Exception("broker down")
+        broker.get_account_info.return_value = {"balance": 10000, "equity": 10000, "open_positions": 0}
+
+        engine = TradingEngine(
+            strategy=strategy, feed=feed, broker=broker,
+            symbol="EURUSD=X", timeframe="1h",
+        )
+        engine._running.set()
+        engine._last_tick_log = 0.0  # force tick summary
+
+        tick = {"timestamp": pd.Timestamp("2024-01-15T10:00:00"), "bid": 1.0850, "ask": 1.0852}
+        # Should not raise
+        engine._on_tick(tick)
+        assert engine._consecutive_tick_errors == 1
+        assert engine._running.is_set()  # Engine still running
+
+    def test_wait_timeout(self):
+        engine, broker = self._make_engine()
+        engine._running.set()
+        # wait with short timeout should return False (not stopped)
+        result = engine.wait(timeout=0.1)
+        assert result is False
+        # After stopping, wait should return True
+        engine._running.clear()
+        result = engine.wait(timeout=0.1)
+        assert result is True

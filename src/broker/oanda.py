@@ -1,5 +1,7 @@
 """OandaBroker — live order execution via OANDA v20 REST API."""
 
+import time
+
 import requests
 
 from config.settings import (
@@ -46,13 +48,36 @@ class OandaBroker(Broker):
     def _instrument(self, symbol: str) -> str:
         return OANDA_SYMBOL_MAP.get(symbol, symbol)
 
-    def _api(self, method: str, path: str, json_data: dict | None = None) -> dict:
+    def _api(
+        self, method: str, path: str, json_data: dict | None = None, max_retries: int = 3
+    ) -> dict:
         url = f"{self._base_url}/v3/accounts/{self._account_id}{path}"
-        resp = requests.request(
-            method, url, headers=self._headers, json=json_data, timeout=30,
-        )
-        resp.raise_for_status()
-        return resp.json()
+        last_exc: Exception | None = None
+
+        for attempt in range(max_retries):
+            try:
+                resp = requests.request(
+                    method, url, headers=self._headers, json=json_data, timeout=30,
+                )
+                resp.raise_for_status()
+                return resp.json()
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                last_exc = e
+                log.warning("oanda_api_retry", attempt=attempt + 1, error=str(e))
+            except requests.exceptions.HTTPError as e:
+                if e.response is not None and e.response.status_code < 500:
+                    raise  # 4xx — don't retry
+                last_exc = e
+                log.warning("oanda_api_retry", attempt=attempt + 1, status=e.response.status_code if e.response else 0)
+            except requests.exceptions.RequestException as e:
+                last_exc = e
+                log.warning("oanda_api_retry", attempt=attempt + 1, error=str(e))
+
+            if attempt < max_retries - 1:
+                backoff = 2 ** attempt  # 1s, 2s, 4s
+                time.sleep(backoff)
+
+        raise last_exc  # type: ignore[misc]
 
     def place_order(
         self, symbol: str, side: OrderSide, volume: float, sl: float, tp: float
@@ -109,12 +134,13 @@ class OandaBroker(Broker):
                 success=True,
                 message="Filled",
             )
-        except requests.exceptions.HTTPError as e:
+        except requests.exceptions.RequestException as e:
             msg = str(e)
-            try:
-                msg = e.response.json().get("errorMessage", msg)
-            except Exception:
-                pass
+            if hasattr(e, "response") and e.response is not None:
+                try:
+                    msg = e.response.json().get("errorMessage", msg)
+                except Exception:
+                    pass
             log.warning("oanda_order_rejected", error=msg)
             return OrderResult(
                 order_id="",
@@ -143,12 +169,13 @@ class OandaBroker(Broker):
                 success=True,
                 message="Closed",
             )
-        except requests.exceptions.HTTPError as e:
+        except requests.exceptions.RequestException as e:
             msg = str(e)
-            try:
-                msg = e.response.json().get("errorMessage", msg)
-            except Exception:
-                pass
+            if hasattr(e, "response") and e.response is not None:
+                try:
+                    msg = e.response.json().get("errorMessage", msg)
+                except Exception:
+                    pass
             log.warning("oanda_close_failed", trade_id=order_id, error=msg)
             return OrderResult(
                 order_id=order_id,

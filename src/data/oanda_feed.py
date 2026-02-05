@@ -1,6 +1,7 @@
 """OANDA v20 data feed — historical candles and streaming prices."""
 
 import json
+import threading
 import time
 from typing import Callable
 
@@ -8,6 +9,9 @@ import pandas as pd
 import requests
 
 from config.settings import (
+    FEED_BASE_BACKOFF,
+    FEED_MAX_BACKOFF,
+    FEED_MAX_RECONNECT_ATTEMPTS,
     OANDA_ACCOUNT_ID,
     OANDA_API_TOKEN,
     OANDA_BASE_URL,
@@ -39,6 +43,19 @@ class OandaFeed(DataFeed):
             "Authorization": f"Bearer {api_token}",
             "Content-Type": "application/json",
         }
+        self._stop_event = threading.Event()
+        self._on_stream_death: Callable[[], None] | None = None
+        self._max_reconnect_attempts = FEED_MAX_RECONNECT_ATTEMPTS
+        self._base_backoff = FEED_BASE_BACKOFF
+        self._max_backoff = FEED_MAX_BACKOFF
+
+    def set_stream_death_callback(self, callback: Callable[[], None]) -> None:
+        """Register a callback to be called when the stream gives up reconnecting."""
+        self._on_stream_death = callback
+
+    def request_stop(self) -> None:
+        """Signal the stream to stop reconnecting."""
+        self._stop_event.set()
 
     def _instrument(self, symbol: str) -> str:
         return OANDA_SYMBOL_MAP.get(symbol, symbol)
@@ -119,7 +136,10 @@ class OandaFeed(DataFeed):
 
         log.info("oanda_stream_starting", instrument=instrument)
 
-        while True:
+        backoff = self._base_backoff
+        attempt = 0
+
+        while not self._stop_event.is_set():
             try:
                 resp = requests.get(
                     url,
@@ -130,7 +150,13 @@ class OandaFeed(DataFeed):
                 )
                 resp.raise_for_status()
 
+                # Connected successfully — reset backoff
+                backoff = self._base_backoff
+                attempt = 0
+
                 for line in resp.iter_lines():
+                    if self._stop_event.is_set():
+                        return
                     if not line:
                         continue
                     data = json.loads(line)
@@ -148,6 +174,25 @@ class OandaFeed(DataFeed):
                         "ask": float(asks[0]["price"]),
                     })
 
+            except requests.exceptions.HTTPError as e:
+                status = e.response.status_code if e.response is not None else 0
+                if 400 <= status < 500:
+                    log.error("oanda_stream_auth_error", status=status, error=str(e))
+                    break  # Auth/client error — no point retrying
+                log.warning("oanda_stream_reconnecting", attempt=attempt + 1, error=str(e))
             except requests.exceptions.RequestException as e:
-                log.warning("oanda_stream_reconnecting", error=str(e))
-                time.sleep(2)
+                log.warning("oanda_stream_reconnecting", attempt=attempt + 1, error=str(e))
+
+            attempt += 1
+            if attempt >= self._max_reconnect_attempts:
+                log.error("oanda_stream_max_retries", attempts=attempt)
+                break
+
+            log.info("oanda_stream_backoff", seconds=backoff)
+            # Use stop_event.wait() instead of time.sleep() so shutdown can interrupt
+            self._stop_event.wait(backoff)
+            backoff = min(backoff * 2, self._max_backoff)
+
+        # Stream has died or been stopped
+        if not self._stop_event.is_set() and self._on_stream_death is not None:
+            self._on_stream_death()

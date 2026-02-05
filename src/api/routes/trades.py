@@ -12,11 +12,19 @@ router = APIRouter(prefix="/api", tags=["trades"])
 @router.get("/trades", response_model=list[TradeResponse])
 def get_trades(
     limit: int = Query(100, ge=1, le=1000),
+    engine_id: str | None = Query(None),
     mgr: EngineManager = Depends(get_engine_manager),
 ):
-    if mgr.broker is None:
+    if engine_id:
+        inst = mgr.get_engine(engine_id)
+        if inst is None:
+            raise HTTPException(status_code=404, detail=f"Engine '{engine_id}' not found")
+        trades = inst.broker.get_closed_trades()
+    elif mgr.broker is not None:
+        trades = mgr.broker.get_closed_trades()
+    else:
         raise HTTPException(status_code=400, detail="No broker active")
-    trades = mgr.broker.get_closed_trades()
+
     result = []
     for t in trades[-limit:]:
         result.append(TradeResponse(

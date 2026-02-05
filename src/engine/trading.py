@@ -38,6 +38,9 @@ class TradingEngine:
         timeframe: str = "1h",
         save_trades: bool = False,
         event_bus: EventBus | None = None,
+        risk_manager: "RiskManager | None" = None,
+        repository: "TradeRepository | None" = None,
+        run_id: int | None = None,
     ) -> None:
         self.strategy = strategy
         self.feed = feed
@@ -46,12 +49,18 @@ class TradingEngine:
         self.timeframe = timeframe
         self.save_trades = save_trades
         self.event_bus = event_bus
+        self.risk_manager = risk_manager
+        self.repository = repository
+        self.run_id = run_id
 
         self._aggregator = CandleAggregator(timeframe)
         self._running = threading.Event()
         self._stream_thread: threading.Thread | None = None
         self._last_tick_log = 0.0
         self._tick_count = 0
+        self._last_tick_time: float = 0.0
+        self._stream_alive = threading.Event()
+        self._consecutive_tick_errors: int = 0
 
     @property
     def is_running(self) -> bool:
@@ -60,6 +69,18 @@ class TradingEngine:
     @property
     def candle_history(self) -> pd.DataFrame:
         return self._aggregator.history_df
+
+    @property
+    def health_status(self) -> dict:
+        """Return health status of the engine."""
+        now = time.time()
+        last_tick_age = now - self._last_tick_time if self._last_tick_time > 0 else -1
+        return {
+            "running": self._running.is_set(),
+            "stream_alive": self._stream_alive.is_set(),
+            "last_tick_age": round(last_tick_age, 1),
+            "tick_errors": self._consecutive_tick_errors,
+        }
 
     def start(self) -> None:
         """Warm up with historical data, then start streaming in a daemon thread."""
@@ -91,23 +112,49 @@ class TradingEngine:
         log.info("engine_stopping")
         self._running.clear()
 
+        # Signal feed to stop reconnecting
+        if hasattr(self.feed, "request_stop"):
+            self.feed.request_stop()
+
         # Close all open positions
-        positions = self.broker.get_positions()
-        for pos in positions:
-            self.broker.close_position(
-                pos["order_id"], exit_reason="SHUTDOWN"
-            )
+        try:
+            positions = self.broker.get_positions()
+            for pos in positions:
+                try:
+                    self.broker.close_position(
+                        pos["order_id"], exit_reason="SHUTDOWN"
+                    )
+                    self._on_position_closed(pos["order_id"])
+                except Exception:
+                    log.exception("shutdown_close_failed", order_id=pos["order_id"])
+        except Exception:
+            log.exception("shutdown_get_positions_failed")
 
         if self.save_trades:
             self._persist_trades()
 
-        log.info("engine_stopped")
+        # Log final account state
+        try:
+            account = self.broker.get_account_info()
+            log.info("engine_stopped", balance=account.get("balance"), equity=account.get("equity"))
+        except Exception:
+            log.info("engine_stopped")
         self._emit("engine_stopped", {})
 
-    def wait(self) -> None:
-        """Block until the engine is stopped."""
-        while self._running.is_set():
-            time.sleep(0.5)
+    def wait(self, timeout: float | None = None) -> bool:
+        """Block until the engine is stopped. Returns True if stopped, False on timeout."""
+        if timeout is not None:
+            deadline = time.time() + timeout
+            while self._running.is_set():
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    return False
+                time.sleep(min(0.5, remaining))
+            return True
+        else:
+            while self._running.is_set():
+                time.sleep(0.5)
+            return True
 
     def _emit(self, event_type: str, data: Any) -> None:
         """Publish an event to the event bus if present."""
@@ -147,27 +194,51 @@ class TradingEngine:
 
     def _run_stream(self) -> None:
         """Run the price stream (called in daemon thread)."""
+        # Register stream death callback if feed supports it
+        if hasattr(self.feed, "set_stream_death_callback"):
+            self.feed.set_stream_death_callback(self._on_stream_death)
+
+        self._stream_alive.set()
         try:
             self.feed.stream_prices(self.symbol, self._on_tick)
         except Exception:
             log.exception("stream_error")
-            self._running.clear()
+        finally:
+            self._stream_alive.clear()
+            if self._running.is_set():
+                self._on_stream_death()
+
+    def _on_stream_death(self) -> None:
+        """Handle stream death: clear running flag and emit events."""
+        log.error("stream_dead", symbol=self.symbol)
+        self._stream_alive.clear()
+        self._emit("stream_disconnected", {"symbol": self.symbol})
+        self._emit("stream_dead", {"symbol": self.symbol})
+        self._running.clear()
 
     def _on_tick(self, tick: dict) -> None:
         """Callback for each tick from the price stream."""
         if not self._running.is_set():
             return
 
+        self._last_tick_time = time.time()
+
         timestamp = tick["timestamp"]
         bid = tick["bid"]
         ask = tick["ask"]
 
-        # Update broker price
-        self.broker.update_price(self.symbol, bid, ask)
+        try:
+            # Update broker price
+            self.broker.update_price(self.symbol, bid, ask)
 
-        # Check SL/TP on open positions (skip if broker manages SL/TP server-side)
-        if not self.broker.server_managed_sl_tp:
-            self._check_sl_tp(bid, ask)
+            # Check SL/TP on open positions (skip if broker manages SL/TP server-side)
+            if not self.broker.server_managed_sl_tp:
+                self._check_sl_tp(bid, ask)
+        except Exception:
+            self._consecutive_tick_errors += 1
+            log.exception("tick_broker_error", errors=self._consecutive_tick_errors)
+        else:
+            self._consecutive_tick_errors = 0
 
         # Aggregate into candle
         completed = self._aggregator.on_tick(timestamp, bid, ask)
@@ -181,14 +252,17 @@ class TradingEngine:
         now = time.time()
         if now - self._last_tick_log >= TICK_LOG_INTERVAL:
             mid = (bid + ask) / 2
-            account = self.broker.get_account_info()
-            log.info(
-                "tick_summary",
-                ticks=self._tick_count,
-                price=round(mid, 5),
-                equity=round(account["equity"], 2),
-                open_positions=account["open_positions"],
-            )
+            try:
+                account = self.broker.get_account_info()
+                log.info(
+                    "tick_summary",
+                    ticks=self._tick_count,
+                    price=round(mid, 5),
+                    equity=round(account["equity"], 2),
+                    open_positions=account["open_positions"],
+                )
+            except Exception:
+                log.warning("tick_summary_error", ticks=self._tick_count, price=round(mid, 5))
             self._last_tick_log = now
             self._tick_count = 0
 
@@ -218,7 +292,39 @@ class TradingEngine:
                     closed = True
 
             if closed:
-                self._emit("position_closed", {"order_id": order_id})
+                self._on_position_closed(order_id)
+
+    def _on_position_closed(self, order_id: str) -> None:
+        """Handle post-close tasks: persist trade, record risk, emit event."""
+        # Find the closed trade in broker's history
+        closed_trades = self.broker.get_closed_trades()
+        trade = None
+        for t in reversed(closed_trades):
+            if t.get("order_id") == order_id or (
+                not trade and closed_trades  # fallback to last trade
+            ):
+                trade = t
+                break
+
+        if trade is None and closed_trades:
+            trade = closed_trades[-1]
+
+        if trade:
+            trade["strategy_name"] = self.strategy.name
+            trade["timeframe"] = self.timeframe
+
+            # Record PnL in risk manager
+            if self.risk_manager is not None:
+                self.risk_manager.record_trade(trade.get("pnl", 0.0))
+
+            # Auto-persist to DB
+            if self.repository is not None and self.run_id is not None:
+                try:
+                    self.repository.insert_trade(trade, self.run_id)
+                except Exception:
+                    log.exception("auto_persist_trade_failed")
+
+        self._emit("position_closed", {"order_id": order_id})
 
     def _on_candle_close(self, candle: dict) -> None:
         """Process a completed candle: compute indicators, generate signals, place orders."""
@@ -272,10 +378,37 @@ class TradingEngine:
 
         self._emit("signal", {"side": side.value, "sl": sl_price, "tp": tp_price})
 
+        # Risk checks before placing order
+        if self.risk_manager is not None:
+            if not self.risk_manager.check_daily_loss():
+                log.warning("order_blocked_circuit_breaker")
+                self._emit("circuit_breaker", {"reason": "daily_loss_limit"})
+                self._emit("risk_blocked", {"reason": "daily_loss_limit", "side": side.value})
+                return
+
+            if not self.risk_manager.check_position_limits(self.symbol, side.value):
+                log.warning("order_blocked_position_limit")
+                self._emit("risk_blocked", {"reason": "position_limit", "side": side.value})
+                return
+
+            if not self.risk_manager.check_portfolio_risk():
+                log.warning("order_blocked_portfolio_risk")
+                self._emit("risk_blocked", {"reason": "portfolio_risk", "side": side.value})
+                return
+
+            # Use risk manager sizing
+            account = self.broker.get_account_info()
+            sl_distance = abs(last["close"] - sl_price)
+            volume = self.risk_manager.calculate_position_size(
+                account["equity"], sl_distance, self.symbol
+            )
+        else:
+            volume = 0  # triggers broker's default sizing
+
         result = self.broker.place_order(
             symbol=self.symbol,
             side=side,
-            volume=0,  # triggers risk-based sizing
+            volume=volume,
             sl=sl_price,
             tp=tp_price,
         )
