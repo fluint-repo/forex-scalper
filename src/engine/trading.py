@@ -1,8 +1,11 @@
 """TradingEngine — orchestrates feed, candle aggregation, strategy, and broker."""
 
+from __future__ import annotations
+
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import pandas as pd
 
@@ -11,12 +14,12 @@ from config.settings import (
     PIP_VALUES,
     TICK_LOG_INTERVAL,
 )
-from src.broker.base import OrderSide
-from src.broker.paper import PaperBroker
-from src.data.demo_feed import DemoFeed
+from src.broker.base import Broker, OrderSide
+from src.data.feed import DataFeed
 from src.data.indicators import add_all_indicators
 from src.database.repository import TradeRepository
 from src.engine.candle_aggregator import CandleAggregator, TIMEFRAME_SECONDS
+from src.engine.event_bus import EventBus
 from src.strategy.base import Strategy
 from src.utils.logger import get_logger
 
@@ -29,11 +32,12 @@ class TradingEngine:
     def __init__(
         self,
         strategy: Strategy,
-        feed: DemoFeed,
-        broker: PaperBroker,
+        feed: DataFeed,
+        broker: Broker,
         symbol: str = "EURUSD=X",
         timeframe: str = "1h",
         save_trades: bool = False,
+        event_bus: EventBus | None = None,
     ) -> None:
         self.strategy = strategy
         self.feed = feed
@@ -41,6 +45,7 @@ class TradingEngine:
         self.symbol = symbol
         self.timeframe = timeframe
         self.save_trades = save_trades
+        self.event_bus = event_bus
 
         self._aggregator = CandleAggregator(timeframe)
         self._running = threading.Event()
@@ -51,6 +56,10 @@ class TradingEngine:
     @property
     def is_running(self) -> bool:
         return self._running.is_set()
+
+    @property
+    def candle_history(self) -> pd.DataFrame:
+        return self._aggregator.history_df
 
     def start(self) -> None:
         """Warm up with historical data, then start streaming in a daemon thread."""
@@ -72,6 +81,7 @@ class TradingEngine:
         )
         self._stream_thread.start()
         log.info("engine_started")
+        self._emit("engine_started", {"symbol": self.symbol, "strategy": self.strategy.name})
 
     def stop(self) -> None:
         """Stop engine: close all positions, persist trades."""
@@ -92,11 +102,17 @@ class TradingEngine:
             self._persist_trades()
 
         log.info("engine_stopped")
+        self._emit("engine_stopped", {})
 
     def wait(self) -> None:
         """Block until the engine is stopped."""
         while self._running.is_set():
             time.sleep(0.5)
+
+    def _emit(self, event_type: str, data: Any) -> None:
+        """Publish an event to the event bus if present."""
+        if self.event_bus is not None:
+            self.event_bus.publish(event_type, data)
 
     def _warmup(self) -> None:
         """Fetch historical candles and seed the aggregator."""
@@ -149,13 +165,16 @@ class TradingEngine:
         # Update broker price
         self.broker.update_price(self.symbol, bid, ask)
 
-        # Check SL/TP on open positions
-        self._check_sl_tp(bid, ask)
+        # Check SL/TP on open positions (skip if broker manages SL/TP server-side)
+        if not self.broker.server_managed_sl_tp:
+            self._check_sl_tp(bid, ask)
 
         # Aggregate into candle
         completed = self._aggregator.on_tick(timestamp, bid, ask)
         if completed is not None:
             self._on_candle_close(completed)
+
+        self._emit("tick", {"timestamp": str(timestamp), "bid": bid, "ask": ask})
 
         # Periodic tick log
         self._tick_count += 1
@@ -182,16 +201,24 @@ class TradingEngine:
             sl = pos["sl"]
             tp = pos["tp"]
 
+            closed = False
             if side == "BUY":
                 if bid <= sl:
                     self.broker.close_position(order_id, exit_price=sl, exit_reason="SL")
+                    closed = True
                 elif bid >= tp:
                     self.broker.close_position(order_id, exit_price=tp, exit_reason="TP")
+                    closed = True
             else:  # SELL
                 if ask >= sl:
                     self.broker.close_position(order_id, exit_price=sl, exit_reason="SL")
+                    closed = True
                 elif ask <= tp:
                     self.broker.close_position(order_id, exit_price=tp, exit_reason="TP")
+                    closed = True
+
+            if closed:
+                self._emit("position_closed", {"order_id": order_id})
 
     def _on_candle_close(self, candle: dict) -> None:
         """Process a completed candle: compute indicators, generate signals, place orders."""
@@ -203,6 +230,8 @@ class TradingEngine:
             low=round(candle["low"], 5),
             close=round(candle["close"], 5),
         )
+
+        self._emit("candle_closed", candle)
 
         df = self._aggregator.history_df
         if len(df) < 200:
@@ -241,6 +270,8 @@ class TradingEngine:
             tp=round(tp_price, 5),
         )
 
+        self._emit("signal", {"side": side.value, "sl": sl_price, "tp": tp_price})
+
         result = self.broker.place_order(
             symbol=self.symbol,
             side=side,
@@ -249,7 +280,14 @@ class TradingEngine:
             tp=tp_price,
         )
 
-        if not result.success:
+        if result.success:
+            self._emit("order_filled", {
+                "order_id": result.order_id,
+                "side": side.value,
+                "price": result.price,
+                "volume": result.volume,
+            })
+        else:
             log.warning("order_rejected", message=result.message)
 
     def _persist_trades(self) -> None:

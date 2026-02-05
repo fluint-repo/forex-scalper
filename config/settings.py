@@ -55,3 +55,43 @@ PIP_VALUES = {
 # --- Phase 3: Live/Paper Trading Settings ---
 CANDLE_HISTORY_SIZE = int(os.getenv("CANDLE_HISTORY_SIZE", "250"))
 TICK_LOG_INTERVAL = int(os.getenv("TICK_LOG_INTERVAL", "60"))
+
+# --- Phase 4: OANDA + API Settings ---
+
+# OANDA v20 API
+OANDA_ACCOUNT_ID = os.getenv("OANDA_ACCOUNT_ID", "")
+OANDA_API_TOKEN = os.getenv("OANDA_API_TOKEN", "")
+OANDA_ENVIRONMENT = os.getenv("OANDA_ENVIRONMENT", "practice")  # practice or live
+
+OANDA_BASE_URL = {
+    "practice": "https://api-fxpractice.oanda.com",
+    "live": "https://api-fxtrade.oanda.com",
+}
+
+OANDA_STREAM_URL = {
+    "practice": "https://stream-fxpractice.oanda.com",
+    "live": "https://stream-fxtrade.oanda.com",
+}
+
+# Map our symbols to OANDA instrument names
+OANDA_SYMBOL_MAP = {
+    "EURUSD=X": "EUR_USD",
+    "GBPUSD=X": "GBP_USD",
+    "USDJPY=X": "USD_JPY",
+}
+
+# OANDA granularity mapping
+OANDA_GRANULARITY_MAP = {
+    "1m": "M1",
+    "5m": "M5",
+    "15m": "M15",
+    "1h": "H1",
+    "4h": "H4",
+    "1d": "D",
+}
+
+# FastAPI / WebSocket
+API_HOST = os.getenv("API_HOST", "0.0.0.0")
+API_PORT = int(os.getenv("API_PORT", "8000"))
+WS_BROADCAST_INTERVAL = float(os.getenv("WS_BROADCAST_INTERVAL", "2.0"))
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")

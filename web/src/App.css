@@ -1,0 +1,388 @@
+/* ========================================
+   Forex Scalper Dashboard - Dark Theme
+   ======================================== */
+
+/* Dashboard Layout */
+.dashboard {
+  min-height: 100vh;
+  padding: 1rem;
+}
+
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  background: var(--bg-card);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.dashboard-header h1 {
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #ffffff;
+}
+
+.connection-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+/* Dashboard Grid */
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto auto auto;
+  gap: 1rem;
+}
+
+.grid-top-left {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.grid-top-right {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.grid-middle {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+.grid-bottom-left {
+  grid-column: 1 / -1;
+  grid-row: 3;
+}
+
+.grid-bottom-center {
+  grid-column: 1 / -1;
+  grid-row: 4;
+}
+
+.grid-bottom-right {
+  grid-column: 1 / -1;
+  grid-row: 5;
+}
+
+@media (min-width: 1200px) {
+  .dashboard-grid {
+    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-rows: auto auto auto;
+  }
+
+  .grid-top-left {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .grid-top-right {
+    grid-column: 2 / -1;
+    grid-row: 1;
+  }
+
+  .grid-middle {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .grid-bottom-left {
+    grid-column: 1;
+    grid-row: 3;
+  }
+
+  .grid-bottom-center {
+    grid-column: 2;
+    grid-row: 3;
+  }
+
+  .grid-bottom-right {
+    grid-column: 3;
+    grid-row: 3;
+  }
+}
+
+/* Cards */
+.card {
+  background: var(--bg-card);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  padding: 1rem;
+  overflow: hidden;
+}
+
+.card-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.75px;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.card-header .card-title {
+  margin-bottom: 0;
+}
+
+/* Account Stats Grid */
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.stat-card {
+  background: var(--bg-accent);
+  border-radius: 6px;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.stat-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.stat-value {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+/* Monospace numbers */
+.mono {
+  font-family: var(--font-mono);
+}
+
+/* Text colors */
+.text-green {
+  color: var(--green);
+  font-weight: 600;
+}
+
+.text-red {
+  color: var(--red);
+  font-weight: 600;
+}
+
+/* Tables */
+.table-wrapper {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+thead {
+  background: var(--bg-accent);
+}
+
+th {
+  padding: 0.6rem 0.75rem;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  user-select: none;
+  border-bottom: 2px solid var(--border);
+}
+
+td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+tbody tr:hover {
+  background: rgba(15, 52, 96, 0.3);
+}
+
+.empty-row {
+  text-align: center;
+  color: var(--text-secondary);
+  padding: 2rem 0.75rem !important;
+  font-style: italic;
+}
+
+/* Filter input */
+.filter-input {
+  background: var(--bg-accent);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.4rem 0.75rem;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  outline: none;
+  width: 200px;
+  transition: border-color 0.2s;
+}
+
+.filter-input:focus {
+  border-color: #4fc3f7;
+}
+
+.filter-input::placeholder {
+  color: var(--text-secondary);
+}
+
+/* Strategy Controls */
+.controls-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.75rem;
+  align-items: end;
+}
+
+.control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.control-group label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.control-group select,
+.control-group input[type='number'] {
+  background: var(--bg-accent);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.5rem 0.6rem;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.control-group select:focus,
+.control-group input[type='number']:focus {
+  border-color: #4fc3f7;
+}
+
+.control-group select:disabled,
+.control-group input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.control-action {
+  justify-content: flex-end;
+}
+
+.status-bar {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(0, 200, 83, 0.1);
+  border: 1px solid rgba(0, 200, 83, 0.3);
+  border-radius: 4px;
+  font-size: 0.85rem;
+  color: var(--green);
+}
+
+.error-bar {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(255, 23, 68, 0.1);
+  border: 1px solid rgba(255, 23, 68, 0.3);
+  border-radius: 4px;
+  font-size: 0.85rem;
+  color: var(--red);
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: background-color 0.2s, opacity 0.2s;
+  white-space: nowrap;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background-color: var(--green);
+  color: #ffffff;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background-color: #00e676;
+}
+
+.btn-danger {
+  background-color: var(--red);
+  color: #ffffff;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background-color: #ff5252;
+}
+
+.btn-sm {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.75rem;
+}
+
+.btn-lg {
+  padding: 0.5rem 1.25rem;
+  font-size: 0.9rem;
+}
+
+/* Chart containers */
+.chart-container {
+  width: 100%;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+/* Price chart specific */
+.price-chart .chart-container {
+  min-height: 400px;
+}
+
+/* PnL panel specific */
+.pnl-panel .chart-container {
+  min-height: 250px;
+}

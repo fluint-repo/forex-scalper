@@ -150,9 +150,9 @@ class PaperBroker(Broker):
                 message="Filled",
             )
 
-    def close_position(
-        self, order_id: str, exit_price: float | None = None, exit_reason: str = "MANUAL"
-    ) -> OrderResult:
+    def close_position(self, order_id: str, **kwargs) -> OrderResult:
+        exit_price: float | None = kwargs.get("exit_price")
+        exit_reason: str = kwargs.get("exit_reason", "MANUAL")
         with self._lock:
             pos = self._positions.get(order_id)
             if pos is None:
