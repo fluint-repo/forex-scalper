@@ -97,6 +97,21 @@ class NotificationService:
                 f"Issue: {data.get('issue', 'N/A')}\n"
                 f"Details: {data.get('details', 'N/A')}"
             )
+        elif event_type == "llm_blocked":
+            subject = "LLM Blocked Trade"
+            body = (
+                f"Side: {data.get('side', 'N/A')}\n"
+                f"Mean Confidence: {data.get('mean_confidence', 'N/A')}%\n"
+                f"Threshold: {data.get('threshold', 'N/A')}%"
+            )
+        elif event_type == "llm_assessment":
+            subject = "LLM Assessment"
+            approved = "Approved" if data.get("approved") else "Rejected"
+            body = (
+                f"Result: {approved}\n"
+                f"Mean Confidence: {data.get('mean_confidence', 'N/A')}%\n"
+                f"Threshold: {data.get('threshold', 'N/A')}%"
+            )
         else:
             subject = f"Event: {event_type}"
             body = str(data)

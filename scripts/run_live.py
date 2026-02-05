@@ -68,6 +68,24 @@ def main() -> None:
     strategy = STRATEGIES[args.strategy]()
     broker, feed = _create_broker_and_feed(args)
 
+    # Build LLM assessor if enabled
+    llm_assessor = None
+    from config import settings as _s
+    if _s.LLM_ENABLED:
+        from src.llm.assessor import LLMAssessor
+        providers = []
+        if _s.ANTHROPIC_API_KEY:
+            from src.llm.anthropic import AnthropicProvider
+            providers.append(AnthropicProvider(_s.ANTHROPIC_API_KEY, _s.LLM_ANTHROPIC_MODEL))
+        if _s.OPENAI_API_KEY:
+            from src.llm.openai import OpenAIProvider
+            providers.append(OpenAIProvider(_s.OPENAI_API_KEY, _s.LLM_OPENAI_MODEL))
+        if _s.XAI_API_KEY:
+            from src.llm.grok import GrokProvider
+            providers.append(GrokProvider(_s.XAI_API_KEY, _s.LLM_GROK_MODEL))
+        llm_assessor = LLMAssessor(providers, _s.LLM_CONFIDENCE_THRESHOLD, _s.LLM_TIMEOUT)
+        log.info("llm_assessor_created", providers=[p.name for p in providers])
+
     engine = TradingEngine(
         strategy=strategy,
         feed=feed,
@@ -75,6 +93,7 @@ def main() -> None:
         symbol=args.symbol,
         timeframe=args.timeframe,
         save_trades=args.save_trades,
+        llm_assessor=llm_assessor,
     )
 
     # Signal handlers for graceful shutdown
