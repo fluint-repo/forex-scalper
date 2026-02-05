@@ -10,7 +10,7 @@ from config import settings
 from config.settings import CORS_ORIGINS
 from src.api.auth import require_api_key
 from src.api.deps import set_notification_service
-from src.api.routes import account, candles, notifications, performance, positions, risk, strategy, trades
+from src.api.routes import account, candles, llm, notifications, performance, positions, risk, strategy, trades
 from src.api.ws import periodic_account_broadcast, router as ws_router
 
 
@@ -82,6 +82,7 @@ app.include_router(strategy.router, dependencies=_auth)
 app.include_router(risk.router, dependencies=_auth)
 app.include_router(notifications.router, dependencies=_auth)
 app.include_router(performance.router, dependencies=_auth)
+app.include_router(llm.router, dependencies=_auth)
 app.include_router(ws_router)
 
 

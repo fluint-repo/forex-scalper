@@ -41,6 +41,7 @@ class TradingEngine:
         risk_manager: "RiskManager | None" = None,
         repository: "TradeRepository | None" = None,
         run_id: int | None = None,
+        llm_assessor: "LLMAssessor | None" = None,
     ) -> None:
         self.strategy = strategy
         self.feed = feed
@@ -52,6 +53,7 @@ class TradingEngine:
         self.risk_manager = risk_manager
         self.repository = repository
         self.run_id = run_id
+        self.llm_assessor = llm_assessor
 
         self._aggregator = CandleAggregator(timeframe)
         self._running = threading.Event()
@@ -404,6 +406,55 @@ class TradingEngine:
             )
         else:
             volume = 0  # triggers broker's default sizing
+
+        # LLM confidence assessment
+        if self.llm_assessor is not None:
+            try:
+                signal_ctx = {
+                    "side": side.value,
+                    "entry_price": float(last["close"]),
+                    "sl": float(sl_price),
+                    "tp": float(tp_price),
+                }
+                try:
+                    account_ctx = self.broker.get_account_info()
+                except Exception:
+                    account_ctx = None
+
+                llm_result = self.llm_assessor.assess_trade(signal_ctx, df, account_ctx)
+
+                self._emit("llm_assessment", {
+                    "mean_confidence": llm_result.mean_confidence,
+                    "approved": llm_result.approved,
+                    "threshold": llm_result.threshold,
+                    "all_failed": llm_result.all_failed,
+                    "assessments": [
+                        {
+                            "provider": a.provider,
+                            "confidence": a.confidence,
+                            "reasoning": a.reasoning,
+                            "success": a.success,
+                            "error": a.error,
+                        }
+                        for a in llm_result.assessments
+                    ],
+                })
+
+                if not llm_result.approved:
+                    log.warning(
+                        "llm_blocked_trade",
+                        mean_confidence=round(llm_result.mean_confidence, 1),
+                        threshold=llm_result.threshold,
+                    )
+                    self._emit("llm_blocked", {
+                        "side": side.value,
+                        "mean_confidence": llm_result.mean_confidence,
+                        "threshold": llm_result.threshold,
+                    })
+                    return
+            except Exception:
+                log.exception("llm_assessment_error")
+                # Fail-open: continue to place order
 
         result = self.broker.place_order(
             symbol=self.symbol,

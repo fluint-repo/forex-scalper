@@ -26,6 +26,12 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set}
       DB_NAME: forex_scalper
       DATA_FEED: demo
+      LLM_ENABLED: ${LLM_ENABLED:-false}
+      LLM_CONFIDENCE_THRESHOLD: ${LLM_CONFIDENCE_THRESHOLD:-70.0}
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-10.0}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
     volumes:
       - ./:/app
 
@@ -49,6 +55,12 @@ services:
       OANDA_ENVIRONMENT: ${OANDA_ENVIRONMENT:-practice}
       API_KEY: ${API_KEY:-}
       CORS_ORIGINS: "http://localhost:3000,http://web:80"
+      LLM_ENABLED: ${LLM_ENABLED:-false}
+      LLM_CONFIDENCE_THRESHOLD: ${LLM_CONFIDENCE_THRESHOLD:-70.0}
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-10.0}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
     volumes:
       - ./:/app
 

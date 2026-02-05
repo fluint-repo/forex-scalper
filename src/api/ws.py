@@ -97,7 +97,8 @@ def setup_event_bus_bridge(engine_id: str = "") -> None:
             handler = _make_event_handler(inst.engine_id)
             for evt in ("tick", "candle_closed", "signal", "order_filled",
                          "position_closed", "engine_started", "engine_stopped",
-                         "circuit_breaker", "risk_blocked"):
+                         "circuit_breaker", "risk_blocked",
+                         "llm_assessment", "llm_blocked"):
                 inst.event_bus.subscribe(evt, handler)
             _subscribed_buses.add(bus_id)
 
@@ -108,7 +109,8 @@ def setup_event_bus_bridge(engine_id: str = "") -> None:
             handler = _make_event_handler(engine_id)
             for evt in ("tick", "candle_closed", "signal", "order_filled",
                          "position_closed", "engine_started", "engine_stopped",
-                         "circuit_breaker", "risk_blocked"):
+                         "circuit_breaker", "risk_blocked",
+                         "llm_assessment", "llm_blocked"):
                 mgr.event_bus.subscribe(evt, handler)
             _subscribed_buses.add(bus_id)
 

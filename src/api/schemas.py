@@ -67,3 +67,26 @@ class StrategyStatusResponse(BaseModel):
 
 class StrategyParamsUpdate(BaseModel):
     params: dict
+
+
+class LLMProviderAssessment(BaseModel):
+    provider: str
+    confidence: float
+    reasoning: str
+    success: bool
+    error: str = ""
+
+
+class LLMAssessmentResponse(BaseModel):
+    mean_confidence: float
+    approved: bool
+    threshold: float
+    all_failed: bool
+    assessments: list[LLMProviderAssessment]
+
+
+class LLMStatusResponse(BaseModel):
+    enabled: bool
+    threshold: float
+    timeout: float
+    providers: list[str]
